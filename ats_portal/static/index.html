@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="ATS 本机测试结果归档、问题分类与原始日志查看。">
+  <title>ATS · 测试归档</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#runs" aria-label="ATS 测试归档首页"><span class="brand-mark">A<span></span></span><span><strong>ATS</strong><small>TEST ARCHIVE</small></span></a>
+    <div class="workspace"><span class="workspace-icon">L</span><div>本地工作空间<small>LOCAL WORKSPACE</small></div></div>
+    <div class="nav-label">测试分析</div>
+    <nav aria-label="主导航">
+      <a href="#runs" id="nav-runs"><span class="nav-icon">▤</span>测试记录</a>
+      <a href="#issues" id="nav-issues"><span class="nav-icon">◇</span>问题视图</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="connection-dot"></span><div>Ubuntu 本地服务<small>数据保存在本机</small></div><span class="version">v1.0</span></div>
+  </aside>
+  <div class="workspace-main">
+    <header class="topbar"><div><span class="muted">工作空间</span><span class="crumb-sep">/</span><strong>ATS 测试归档</strong></div><div class="topbar-right"><span id="timezone-label">Asia/Shanghai</span><button class="icon-button" id="refresh" title="刷新数据" aria-label="刷新数据">↻</button><span class="avatar">AT</span></div></header>
+    <main id="main" tabindex="-1"><div class="loading">正在连接本机服务…</div></main>
+    <footer>ATS TEST ARCHIVE <span>·</span> 本地归档，原始记录可追溯</footer>
+  </div>
+  <dialog id="auth-dialog"><form id="auth-form"><div class="dialog-icon">⌑</div><h2>访问本机归档</h2><p>此服务已启用访问保护，请输入配置的访问凭据。</p><label>访问凭据<input name="token" type="password" autocomplete="current-password" required></label><p id="auth-error" class="error-text" role="alert"></p><button class="button primary" type="submit">连接工作空间</button></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>

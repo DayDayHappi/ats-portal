@@ -1,0 +1,8 @@
+ATS Portal Windows website package
+Source commit: ebc203ee3d2940657cb7c5750ed57145aadf35c9
+Packaged: 2026-09-29
+Python regression: 63 passed on Linux/Python 3.12
+Browser core journey: passed on Linux
+Windows CPython 3.12 x64 wheels: resolved and downloaded
+Native Windows execution: not performed
+Start here: README-Windows.md

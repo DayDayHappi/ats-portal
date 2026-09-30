@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.superpowers/
+.env
+data/
+*.sqlite3*
+dist/

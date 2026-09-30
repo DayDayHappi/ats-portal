@@ -1,0 +1,8 @@
+{
+  "version": "ats-default-1",
+  "rules": [
+    {"id": "firmware_keyword", "name": "固件错误串", "keywords": ["TT ERROR", "imu_fmq_overflow"]},
+    {"id": "video_integrity", "name": "视频完整性", "keywords": ["Could not find ref with POC", "Invalid NAL unit", "Error parsing NAL unit"]},
+    {"id": "timeout", "name": "执行超时", "keywords": ["timeout", "timed out", "超时"], "statuses": ["FAIL", "ERROR"]}
+  ]
+}
