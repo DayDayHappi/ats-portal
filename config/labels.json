@@ -1,0 +1,9 @@
+{
+  "labels": [
+    {"id": "firmware", "name": "固件缺陷"},
+    {"id": "environment", "name": "环境问题"},
+    {"id": "testcase", "name": "用例问题"},
+    {"id": "pending", "name": "待定"},
+    {"id": "false-positive", "name": "人工误判"}
+  ]
+}

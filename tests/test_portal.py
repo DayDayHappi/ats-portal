@@ -1,11 +1,13 @@
 import hashlib
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
 
 from ats_portal.config import Settings
+from ats_portal.repository import Repository
 from ats_portal.web import create_app
 
 TOKEN = 'test-token-that-is-only-used-in-tests'
@@ -14,7 +16,9 @@ HEADERS = {'Authorization': f'Bearer {TOKEN}'}
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(data_dir=tmp_path / 'data', upload_token=TOKEN, allowed_hosts=('testserver', '127.0.0.1', 'localhost'))
+    # Empty labels path: annotation tests start from a blank label list, so they
+    # can create names that also happen to appear in config/labels.json.
+    return Settings(data_dir=tmp_path / 'data', upload_token=TOKEN, allowed_hosts=('testserver', '127.0.0.1', 'localhost'), labels_path=tmp_path / 'labels.json')
 
 
 @pytest.fixture
@@ -115,6 +119,19 @@ def test_original_bytes_and_bounded_log_context(client):
     assert r.json()['lines'][0]['text'] == 'TT ERROR camera'
     assert r.json()['has_more'] is True
     assert client.get('/api/v1/runs/run-1/artifacts/serial.log/search', params={'q': 'TT ERROR'}).json()['matches'][0]['number'] == 2
+
+
+def test_search_finds_match_far_past_scan_budget(client):
+    # A match near the end of a large file must surface in one request: search
+    # scans to EOF, not to a fixed byte budget that would silently hide it.
+    m, f = bundle()
+    f['serial.log'] = (b'filler\n' * 100000) + b'[03:55:05.942] RX< bytes_written = 0, JX_IMU_METADATA_TIME = 448\n'
+    m['artifacts'][1].update(size=len(f['serial.log']), sha256=hashlib.sha256(f['serial.log']).hexdigest())
+    upload(client, m, f)
+    page = client.get('/api/v1/runs/run-1/artifacts/serial.log/search', params={'q': 'bytes_written = 0, JX_IMU_METADATA_TIME = 448'}).json()
+    assert len(page['matches']) == 1
+    assert page['matches'][0]['number'] == 100001
+    assert page['has_more'] is False
 
 
 def test_locate_send_command_by_time(client):
@@ -245,3 +262,207 @@ def test_huge_single_line_is_truncated_only_in_view(client):
     assert len(page['lines'][0]['text']) < 30000
     assert page['lines'][1]['text'] == 'last'
     assert client.get('/api/v1/runs/run-1/artifacts/serial.log/download').content == f['serial.log']
+
+
+# ---- human root-cause annotation ----
+
+def fail_run(client, run_id='run-1'):
+    """Upload a run whose result needs attention (status FAIL, linked issue)."""
+    m, files = bundle(run_id=run_id, status='FAIL')
+    upload(client, m, files)
+    return m
+
+
+def test_label_crud(client):
+    r = client.post('/api/v1/labels', json={'name': '固件缺陷'})
+    assert r.status_code == 201
+    label_id = r.json()['id']
+    assert client.get('/api/v1/labels').json()[0]['name'] == '固件缺陷'
+    # empty / control characters rejected
+    assert client.post('/api/v1/labels', json={'name': '  '}).status_code == 422
+    assert client.post('/api/v1/labels', json={'name': 'a\nb'}).status_code == 422
+    # duplicate name rejected (case-insensitive on all platforms)
+    assert client.post('/api/v1/labels', json={'name': '固件缺陷'}).status_code == 409
+    # rename
+    assert client.patch(f'/api/v1/labels/{label_id}', json={'name': '环境问题'}).status_code == 200
+    assert client.patch('/api/v1/labels/missing', json={'name': 'x'}).status_code == 404
+    # rename to an existing name rejected
+    client.post('/api/v1/labels', json={'name': '用例问题'})
+    assert client.patch(f'/api/v1/labels/{label_id}', json={'name': '用例问题'}).status_code == 409
+    # delete
+    assert client.delete(f'/api/v1/labels/{label_id}').status_code == 204
+    assert client.delete('/api/v1/labels/missing').status_code == 404
+
+
+def test_annotation_crud_and_snapshot(client):
+    fail_run(client)
+    l1 = client.post('/api/v1/labels', json={'name': '固件缺陷'}).json()
+    l2 = client.post('/api/v1/labels', json={'name': '环境问题'}).json()
+    base = '/api/v1/runs/run-1/results/0/annotation'
+    body = {'label_ids': [l1['id'], l2['id']], 'note': '视频模块偶发丢帧', 'author': '张三'}
+    r = client.put(base, json=body)
+    assert r.status_code in (200, 201)
+    ann = r.json()
+    assert {x['name'] for x in ann['labels']} == {'固件缺陷', '环境问题'}
+    assert ann['note'] == '视频模块偶发丢帧'
+    assert ann['author'] == '张三'
+    # read back
+    anns = client.get('/api/v1/runs/run-1/annotations').json()
+    assert len(anns) == 1 and anns[0]['result_index'] == 0
+    # idempotent replace
+    body2 = {'label_ids': [l1['id']], 'note': '改判：仅固件', 'author': '张三'}
+    ann = client.put(base, json=body2).json()
+    assert [x['name'] for x in ann['labels']] == ['固件缺陷']
+    assert ann['note'] == '改判：仅固件'
+    assert client.get('/api/v1/runs/run-1/annotations').json()[0]['labels'] == [{'id': l1['id'], 'name': '固件缺陷'}]
+    # rename label: snapshot keeps old name, new annotations use new name
+    client.patch(f"/api/v1/labels/{l1['id']}", json={'name': '固件问题'})
+    assert client.get('/api/v1/runs/run-1/annotations').json()[0]['labels'][0]['name'] == '固件缺陷'
+    # delete
+    assert client.delete(base).status_code == 204
+    assert client.get('/api/v1/runs/run-1/annotations').json() == []
+    assert client.delete(base).status_code == 404
+
+
+def test_annotation_validation(client):
+    fail_run(client)
+    l = client.post('/api/v1/labels', json={'name': '固件缺陷'}).json()
+    base = '/api/v1/runs/run-1/results/0/annotation'
+    # out of range result_index
+    assert client.put('/api/v1/runs/run-1/results/9/annotation', json={'label_ids': [l['id']]}).status_code == 422
+    # unknown label id
+    assert client.put(base, json={'label_ids': ['nope']}).status_code == 422
+    # empty label list
+    assert client.put(base, json={'label_ids': []}).status_code == 422
+    # PASS with no issue is not annotatable
+    m, files = bundle(run_id='pass-run', status='PASS', detail='')
+    upload(client, m, files)
+    assert client.put('/api/v1/runs/pass-run/results/0/annotation', json={'label_ids': [l['id']]}).status_code == 422
+
+
+def test_annotation_requires_complete(client):
+    m, _ = bundle()
+    client.post('/api/v1/runs', json=m, headers=HEADERS)
+    l = client.post('/api/v1/labels', json={'name': '固件缺陷'}).json()
+    assert client.put('/api/v1/runs/run-1/results/0/annotation', json={'label_ids': [l['id']]}).status_code == 409
+
+
+def test_pass_with_keyword_rule_is_annotatable(client):
+    # PASS but detail hits a keyword rule without statuses restriction → attention
+    m, files = bundle(run_id='pass-tt', status='PASS', detail='TT ERROR camera')
+    upload(client, m, files)
+    run = client.get('/api/v1/runs/pass-tt').json()
+    assert any(i['category'] == 'firmware_keyword' for i in run['issues'])
+    l = client.post('/api/v1/labels', json={'name': '固件缺陷'}).json()
+    assert client.put('/api/v1/runs/pass-tt/results/0/annotation', json={'label_ids': [l['id']]}).status_code == 200
+
+
+def test_unannotated_filter_and_label_filter(client):
+    fail_run(client, 'run-a')
+    fail_run(client, 'run-b')
+    l = client.post('/api/v1/labels', json={'name': '固件缺陷'}).json()
+    l2 = client.post('/api/v1/labels', json={'name': '环境问题'}).json()
+    # both needs attention and are unannotated
+    assert client.get('/api/v1/runs', params={'unannotated': 'true'}).json()['total'] == 2
+    assert client.get('/api/v1/runs').json()['stats']['needs_annotation'] == 2
+    # annotate one with two labels
+    client.put('/api/v1/runs/run-a/results/0/annotation', json={'label_ids': [l['id'], l2['id']]})
+    assert client.get('/api/v1/runs', params={'unannotated': 'true'}).json()['total'] == 1
+    assert client.get('/api/v1/runs', params={'label': l['id']}).json()['total'] == 1
+    assert client.get('/api/v1/runs', params={'label': l2['id']}).json()['total'] == 1
+    # label filter composes with other filters (mode + label)
+    assert client.get('/api/v1/runs', params={'label': l['id'], 'mode': 'no-such'}).json()['total'] == 0
+    # label usage count
+    labels = {x['id']: x['count'] for x in client.get('/api/v1/labels').json()}
+    assert labels[l['id']] == 1 and labels[l2['id']] == 1
+
+
+def test_annotation_auth_and_csrf(settings):
+    settings.require_read_auth = True
+    with TestClient(create_app(settings)) as c:
+        assert c.get('/api/v1/labels').status_code == 401
+        assert c.post('/api/v1/labels', json={'name': 'x'}).status_code == 401
+        # cross-site write rejected by boundaries middleware even when authorized
+        assert c.post('/api/v1/labels', json={'name': 'x'}, headers={**HEADERS, 'Origin': 'https://evil.example'}).status_code == 403
+
+
+def test_migration_v1_to_v2(tmp_path):
+    db_path = tmp_path / 'portal.sqlite3'
+    with sqlite3.connect(db_path) as db:
+        db.executescript('''
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY, manifest TEXT NOT NULL,
+            mode_id TEXT NOT NULL, mode_name TEXT NOT NULL,
+            started_at TEXT NOT NULL, started_epoch REAL NOT NULL,
+            run_date TEXT NOT NULL, received_at TEXT NOT NULL,
+            upload_state TEXT NOT NULL, status TEXT NOT NULL,
+            issue_count INTEGER NOT NULL DEFAULT 0,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX runs_date ON runs(run_date, started_epoch DESC);
+        CREATE INDEX runs_mode ON runs(mode_id, started_epoch DESC);
+        CREATE TABLE issues (run_id TEXT NOT NULL REFERENCES runs(id), category TEXT NOT NULL, category_name TEXT NOT NULL);
+        CREATE INDEX issues_category ON issues(category,run_id);
+        PRAGMA user_version=1;
+        ''')
+        payload = {'id': 'old-1', 'status': 'FAIL', 'issues': [{'category': 'test_failure', 'category_name': '用例失败', 'result_index': 0}], 'results': [{'index': 0, 'status': 'FAIL'}]}
+        db.execute('INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', ('old-1', '{}', 'm', 'm', '2026-09-28T10:00:00+08:00', 0.0, '2026-09-28', 'now', 'complete', 'FAIL', 1, json.dumps(payload)))
+    repo = Repository(db_path, labels=[{'id': 'seed', 'name': '播种标签'}])
+    with repo.connect() as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert db.execute('SELECT attention_count FROM runs WHERE id=?', ('old-1',)).fetchone()[0] == 1
+        assert db.execute('SELECT name FROM labels WHERE id=?', ('seed',)).fetchone()[0] == '播种标签'
+        # run_meta table exists from the v2→v3 step
+        db.execute('SELECT run_id FROM run_meta LIMIT 0').fetchall()
+
+
+def test_run_meta_edit_and_fallback(client):
+    # bundle() carries no device/firmware, so the detail falls back to 未记录.
+    fail_run(client, 'run-a')
+    detail = client.get('/api/v1/runs/run-a').json()
+    assert detail['meta'] is None
+    # edit device/firmware with an author
+    r = client.put('/api/v1/runs/run-a/meta', json={'device': 'EVB-01', 'firmware': 'build-123', 'author': '张三'})
+    assert r.status_code == 200
+    meta = r.json()
+    assert meta['device'] == 'EVB-01' and meta['firmware'] == 'build-123' and meta['author'] == '张三'
+    assert client.get('/api/v1/runs/run-a').json()['meta'] == meta
+    # clearing both fields stores an empty override (meta no longer None)
+    meta2 = client.put('/api/v1/runs/run-a/meta', json={'device': '', 'firmware': '', 'author': '张三'}).json()
+    assert meta2['device'] == '' and meta2['firmware'] == ''
+    assert client.get('/api/v1/runs/run-a/meta').json()['device'] == ''
+
+
+def test_run_meta_keeps_original_source(client):
+    # source.device/firmware stay intact in the manifest; meta is a separate overlay.
+    m, files = bundle(run_id='with-device')
+    m['source'] = {'host': 'ubuntu', 'device': 'ORIG-EVB', 'firmware': 'ORIG-FW'}
+    upload(client, m, files)
+    detail = client.get('/api/v1/runs/with-device').json()
+    assert detail['source']['device'] == 'ORIG-EVB'
+    client.put('/api/v1/runs/with-device/meta', json={'device': 'NEW-EVB', 'firmware': '', 'author': '李四'})
+    detail = client.get('/api/v1/runs/with-device').json()
+    assert detail['source']['device'] == 'ORIG-EVB'  # untouched
+    assert detail['meta']['device'] == 'NEW-EVB'  # overlay
+
+
+def test_run_meta_requires_complete(client):
+    m, _ = bundle()
+    client.post('/api/v1/runs', json=m, headers=HEADERS)
+    assert client.put('/api/v1/runs/run-1/meta', json={'device': 'x'}).status_code == 409
+    assert client.get('/api/v1/runs/run-1/meta').status_code == 200
+
+
+def test_run_meta_auth(settings):
+    settings.require_read_auth = True
+    with TestClient(create_app(settings)) as c:
+        assert c.get('/api/v1/runs/any/meta').status_code == 401
+        assert c.put('/api/v1/runs/any/meta', json={'device': 'x'}).status_code == 401
+
+
+def test_future_schema_rejected(tmp_path):
+    db_path = tmp_path / 'portal.sqlite3'
+    with sqlite3.connect(db_path) as db:
+        db.execute('PRAGMA user_version=99')
+    with pytest.raises(RuntimeError):
+        Repository(db_path)

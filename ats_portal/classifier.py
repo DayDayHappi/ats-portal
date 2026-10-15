@@ -5,6 +5,24 @@ from pathlib import Path
 RESERVED = {'test_failure', 'execution_error', 'recovery', 'manual', 'incomplete', 'unknown_status'}
 
 
+def attention_indices(results, issues):
+    """Result indices that need human attention.
+
+    Single source of truth for what the UI marks as "needs attention": a
+    non-PASS/SKIP status, or any linked issue (this includes PASS/SKIP records
+    hit by a keyword rule that has no ``statuses`` restriction). Recovery /
+    manual / incomplete issues carry ``result_index=None`` and thus never make
+    a record annotatable on their own.
+    """
+    indices = {r['index'] for r in results}
+    attention = {r['index'] for r in results if r['status'] not in ('PASS', 'SKIP')}
+    for issue in issues:
+        ri = issue.get('result_index')
+        if ri is not None and ri in indices:
+            attention.add(ri)
+    return attention
+
+
 class Classifier:
     def __init__(self, rules_path: Path):
         config = json.loads(rules_path.read_text(encoding='utf-8'))

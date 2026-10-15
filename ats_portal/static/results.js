@@ -1,6 +1,6 @@
 // Result grouping is independent of rendering, transport, and ATS mode names.
 export function buildResultOverview(run){
-  const tasks=new Map(), rounds=new Map(), scenarioCounts=new Map(), issuesByIndex=new Map();
+  const tasks=new Map(), rounds=new Map(), scenarioCounts=new Map(), issuesByIndex=new Map(), annotationsByIndex=new Map();
   const indices=new Set(run.results.map((result,index)=>result.index??index));
   const unlinkedIssues=[];
   for(const issue of run.issues){
@@ -9,6 +9,9 @@ export function buildResultOverview(run){
     }
     if(!issuesByIndex.has(issue.result_index))issuesByIndex.set(issue.result_index,[]);
     issuesByIndex.get(issue.result_index).push(issue);
+  }
+  for(const annotation of (run.annotations||[])){
+    annotationsByIndex.set(annotation.result_index,annotation);
   }
   const scenarioNames=new Set(run.results.map(result=>result.scenario||run.mode.name||run.mode.id));
   run.results.forEach((result,index)=>{
@@ -26,7 +29,7 @@ export function buildResultOverview(run){
       rounds.set(roundKey,{id:String(rounds.size),cycle,scenario,label:scenarioNames.size>1?`${scenario} · ${label}`:label,records:[],tasks:new Map(),attention:[]});
     }
     const round=rounds.get(roundKey), issues=issuesByIndex.get(result.index??index)||[];
-    const record={result,task,issues,position:index+1,attention:!['PASS','SKIP'].includes(result.status)||issues.length>0};
+    const record={result,task,issues,annotation:annotationsByIndex.get(result.index??index)||null,position:index+1,attention:!['PASS','SKIP'].includes(result.status)||issues.length>0};
     round.records.push(record);
     if(!round.tasks.has(task.id))round.tasks.set(task.id,{task,records:[],attention:[]});
     const cell=round.tasks.get(task.id);cell.records.push(record);
@@ -65,9 +68,11 @@ export function renderResultOverview(model,view,{esc,badge,duration,empty,hasFil
     const task=model.tasks.find(task=>task.id===view.task);
     const records=selected.records.filter(record=>(!task||record.task.id===task.id)&&(!view.detailOnlyIssues||record.attention));
     const count=Math.max(1,Math.ceil(records.length/DETAIL_SIZE));view.detailPage=Math.max(1,Math.min(view.detailPage,count));
-    return `<section id="result-round-detail" class="result-round-detail" tabindex="-1" aria-label="本轮测试详情"><div class="result-detail-heading"><div><h3>${esc(selected.label)}${task?` · 第 ${task.number} 项 ${esc(task.name)}`:''}</h3><p>${roundSummary(selected)}</p></div><button class="button" data-action="result-close">收起本轮详情</button></div><div class="result-detail-controls"><label class="checkbox"><input id="result-detail-only" type="checkbox" ${view.detailOnlyIssues?'checked':''}>仅看本轮问题记录</label>${task?'<button class="button link" data-action="result-all-tasks">查看本轮所有测试项</button>':''}<span>${records.length} 条符合条件的记录</span></div>${records.length?`<div class="table-scroll"><table class="results-table result-records"><thead><tr><th>测试项 / 原始记录</th><th>重复次数</th><th>原始判定</th><th>问题 / 日志</th><th>耗时</th></tr></thead><tbody>${records.slice((view.detailPage-1)*DETAIL_SIZE,view.detailPage*DETAIL_SIZE).map(record=>{
+    return `<section id="result-round-detail" class="result-round-detail" tabindex="-1" aria-label="本轮测试详情"><div class="result-detail-heading"><div><h3>${esc(selected.label)}${task?` · 第 ${task.number} 项 ${esc(task.name)}`:''}</h3><p>${roundSummary(selected)}</p></div><button class="button" data-action="result-close">收起本轮详情</button></div><div class="result-detail-controls"><label class="checkbox"><input id="result-detail-only" type="checkbox" ${view.detailOnlyIssues?'checked':''}>仅看本轮问题记录</label>${task?'<button class="button link" data-action="result-all-tasks">查看本轮所有测试项</button>':''}<span>${records.length} 条符合条件的记录</span></div>${records.length?`<div class="table-scroll"><table class="results-table result-records"><thead><tr><th>测试项 / 原始记录</th><th>重复次数</th><th>原始判定</th><th>问题 / 日志</th><th>根因标注</th><th>耗时</th></tr></thead><tbody>${records.slice((view.detailPage-1)*DETAIL_SIZE,view.detailPage*DETAIL_SIZE).map(record=>{
       const r=record.result, issue=record.issues.find(issue=>issue.search||issue.artifact)||record.issues[0];
-      return `<tr class="result-record-row"><td><span class="result-name">第 ${record.task.number} 项 · ${esc(record.task.name)}</span><small class="result-module">${esc(record.task.module||'模块未标注')} · 原报告第 ${record.position} 条</small><details class="case-detail"><summary>完整记录</summary><pre>${esc([r.timestamp?`时间：${r.timestamp}`:'',r.message?`说明：${r.message}`:'',r.detail?`详情：\n${r.detail}`:''].filter(Boolean).join('\n')||'没有附加说明')}</pre></details></td><td>${repLabel(record)}</td><td>${badge(r.status)}</td><td>${issueKinds(record).map(label=>`<span class="result-problem-tag">${esc(label)}</span>`).join('')||`<span class="muted">${record.attention?'判定需关注':'无已识别问题'}</span>`}${hasFiles&&record.attention?`<button class="button link" data-action="result-log" data-index="${record.result.index}">查看日志</button>`:''}</td><td>${duration(r.elapsed_ms)}</td></tr>`;
+      const ann=record.annotation;
+      const annCell=ann?`<div class="annotation-cell"><span class="annotation-tags">${ann.labels.map(l=>`<span class="annotation-tag">${esc(l.name)}</span>`).join('')}</span>${ann.note?`<small class="annotation-note">${esc(ann.note)}</small>`:''}<small class="annotation-meta">${esc(ann.author||'未署名')} · ${esc(ann.updated_at||ann.created_at||'')}</small></div>`:'<span class="muted">未标注</span>';
+      return `<tr class="result-record-row ${record.attention?'has-attention':''}"><td><span class="result-name">第 ${record.task.number} 项 · ${esc(record.task.name)}</span><small class="result-module">${esc(record.task.module||'模块未标注')} · 原报告第 ${record.position} 条</small><details class="case-detail"><summary>完整记录</summary><pre>${esc([r.timestamp?`时间：${r.timestamp}`:'',r.message?`说明：${r.message}`:'',r.detail?`详情：\n${r.detail}`:''].filter(Boolean).join('\n')||'没有附加说明')}</pre></details></td><td>${repLabel(record)}</td><td>${badge(r.status)}</td><td>${issueKinds(record).map(label=>`<span class="result-problem-tag">${esc(label)}</span>`).join('')||`<span class="muted">${record.attention?'判定需关注':'无已识别问题'}</span>`}${hasFiles&&record.attention?`<button class="button link" data-action="result-log" data-index="${record.result.index}">查看日志</button>`:''}</td><td>${annCell}${record.attention?`<button class="button soft annotate-button" data-action="annotate" data-index="${record.result.index}">${ann?'编辑标注':'标注'}</button>`:''}</td><td>${duration(r.elapsed_ms)}</td></tr>`;
     }).join('')}</tbody></table></div>`:empty('没有符合条件的记录','可取消“仅看本轮问题记录”查看其他执行结果。')}${navigation('record',view.detailPage,count,records.length)}</section>`;
   }
   return `<section class="result-overview" aria-label="按轮次查看用例结果"><div class="result-overview-heading"><div><h2>轮次总览</h2><p>先定位哪一轮、哪一项有问题，再展开执行记录。</p></div><span class="result-overview-status ${attentionRounds.length?'has-attention':''}">${attentionRounds.length?`${attentionRounds.length} 组轮次需关注`:'用例记录无已识别问题'}</span></div><div class="result-overview-stats"><span>已记录轮次 <b>${model.rounds.filter(round=>round.cycle!==null).length}</b></span><span>测试项 <b>${model.tasks.length}</b></span><span>需关注记录 <b>${attentionRounds.reduce((total,round)=>total+round.attention.length,0)}</b></span>${model.rounds.some(round=>round.cycle===null)?'<span>含未标注轮次的记录</span>':''}</div><div class="result-overview-controls"><label class="checkbox"><input id="result-only-issues" type="checkbox" ${view.onlyIssues?'checked':''}>仅看有问题的轮次</label><label class="result-cycle-label">选择轮次<select class="text-input" id="result-cycle"><option value="">全部轮次</option>${model.rounds.map(round=>`<option value="${round.id}" ${view.cycle===round.id?'selected':''}>${esc(round.label)}</option>`).join('')}</select></label></div>${model.unlinkedIssues.length?`<div class="result-unlinked">另有 ${model.unlinkedIssues.length} 条问题未关联到具体测试项。<button class="button link" data-tab="issues">查看问题记录</button></div>`:''}${visible.length?`<div class="table-scroll"><table class="result-rounds"><thead><tr><th>轮次</th><th>执行记录</th><th>有问题的测试项</th><th></th></tr></thead><tbody>${visible.map(round=>{

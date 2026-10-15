@@ -37,6 +37,50 @@ class Artifact(BaseModel):
         return v
 
 
+class Label(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator('name')
+    @classmethod
+    def meaningful(cls, v):
+        if not v.strip() or any(ord(c) < 32 for c in v):
+            raise ValueError('标签名称不能为空或包含控制字符')
+        return v.strip()
+
+
+class AnnotationPut(BaseModel):
+    label_ids: list[str] = Field(min_length=1, max_length=50)
+    note: str = Field(default='', max_length=2000)
+    author: str = Field(default='', max_length=100)
+
+    @field_validator('label_ids')
+    @classmethod
+    def meaningful_ids(cls, v):
+        if not all(isinstance(x, str) and x for x in v):
+            raise ValueError('label_ids 必须包含非空字符串')
+        return list(dict.fromkeys(v))
+
+    @field_validator('note', 'author')
+    @classmethod
+    def no_controls(cls, v):
+        if any(ord(c) < 32 and c not in '\n\t' for c in v):
+            raise ValueError('说明和作者不能包含控制字符')
+        return v
+
+
+class RunMetaPut(BaseModel):
+    device: str = Field(default='', max_length=500)
+    firmware: str = Field(default='', max_length=500)
+    author: str = Field(default='', max_length=100)
+
+    @field_validator('device', 'firmware', 'author')
+    @classmethod
+    def no_controls(cls, v):
+        if any(ord(c) < 32 and c not in '\n\t' for c in v):
+            raise ValueError('设备、固件和作者不能包含控制字符')
+        return v.strip()
+
+
 class Manifest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     schema_version: Literal[1] = 1

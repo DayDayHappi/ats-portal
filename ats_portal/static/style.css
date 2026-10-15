@@ -106,3 +106,38 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .copy-run-id{display:inline-flex;margin-left:8px;padding:2px 7px;font-size:.8rem;color:#8a97a8;border:1px solid var(--border);border-radius:5px;background:#fff;vertical-align:middle}
 .copy-run-id:hover{color:var(--blue);border-color:#c7dcf8}
 .loading-detail{display:grid;gap:14px;padding:20px 0}
+
+/* Human root-cause annotation. */
+.pending-badge{display:inline-block;margin-left:10px;font-size:.72rem;color:#9a6b1f;background:#fbf3e0;padding:3px 7px;border-radius:4px;white-space:nowrap}
+.annotation-cell{display:flex;flex-direction:column;gap:5px;min-width:150px}
+.annotation-tags{display:flex;flex-wrap:wrap;gap:5px}
+.annotation-tag{font-size:.75rem;color:#3c6bb8;background:#eef4fc;border:1px solid #d8e6f7;border-radius:4px;padding:3px 7px}
+.annotation-note{font-size:.72rem;color:#64748b;line-height:1.5;overflow-wrap:anywhere}
+.annotation-meta{font-size:.7rem;color:#a0aaba}
+.annotate-button{min-height:28px;padding:3px 10px;font-size:.75rem;margin-left:8px}
+#annotation-dialog{max-width:520px}
+.annotation-dialog h2{margin-top:16px}
+.annotation-result-title{font-size:1rem;color:#3d608b;font-weight:600;margin:12px 0 2px}
+.annotation-result-sub{font-size:.75rem;color:#94a1b3;margin:0 0 4px}
+.annotation-field{display:block;margin:16px 0 0;padding:0;border:0}
+.annotation-field legend{font-size:.875rem;color:#66758a;margin-bottom:9px;padding:0}
+.annotation-labels{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.annotation-label-option{display:inline-flex!important;align-items:center;gap:6px;border:1px solid #dfe5ec;border-radius:5px;padding:7px 10px;font-size:.8rem;color:#5b6d84;cursor:pointer;background:#fff}
+.annotation-label-option:has(input:checked){border-color:#3b82f6;background:#eef4fc;color:#2f66b0}
+.annotation-label-option input{width:auto;padding:0}
+.annotation-label-option small{color:#9aa6b6}
+.annotation-new-label{display:flex;gap:8px}
+.annotation-new-label input{flex:1}
+.annotation-dialog textarea{border:1px solid var(--border);border-radius:5px;padding:10px;width:100%;resize:vertical;font:inherit;font-size:.875rem}
+.annotation-actions{display:flex;align-items:center;gap:10px;margin-top:20px}
+.annotation-actions .spacer{flex:1}
+.annotation-actions .button{width:auto}
+#annotation-delete{color:#b76776;border-color:#eccfd4;background:#fff7f8}
+.meta-value{display:inline-flex;align-items:center;gap:8px}
+.meta-edit{border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:.75rem;color:#7b8fa9;background:#fff;line-height:1.4}
+.meta-edit:hover{color:var(--blue);border-color:#c7dcf8}
+.meta-by{display:block;font-size:.7rem;color:#a0aaba;margin-top:5px}
+@media(max-width:760px){
+  .pending-badge{margin-left:0;display:block;margin-top:5px}
+  .annotate-button{margin-left:0;margin-top:6px;display:block}
+}

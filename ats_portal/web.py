@@ -1,20 +1,21 @@
 """HTTP adapter; domain and storage logic live outside the routes."""
 import hashlib
 import hmac
-from datetime import date
+import secrets
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .classifier import Classifier
 from .config import Settings
-from .models import DomainError, Manifest
-from .repository import Repository
+from .models import AnnotationPut, DomainError, Label, Manifest, RunMetaPut
+from .repository import Repository, load_label_seed
 from .service import IngestionService
 from .storage import LocalStorage
 
@@ -25,7 +26,7 @@ class SessionInput(BaseModel):
 
 def create_app(settings: Settings | None = None):
     settings = settings or Settings.from_env()
-    repository = Repository(settings.data_dir / 'portal.sqlite3')
+    repository = Repository(settings.data_dir / 'portal.sqlite3', labels=load_label_seed(settings.labels_path))
     storage = LocalStorage(settings.data_dir / 'artifacts')
     service = IngestionService(settings, repository, storage, Classifier(settings.rules_path))
     app = FastAPI(title='ATS Portal', version='1.0.0', docs_url=None, redoc_url=None, openapi_url=None)
@@ -115,10 +116,10 @@ def create_app(settings: Settings | None = None):
         return receipt(service.finalize(run_id))
 
     @app.get('/api/v1/runs', dependencies=[Depends(read_auth)])
-    def list_runs(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), mode: str = '', date_from: date | None = None, date_to: date | None = None, status: str = '', category: str = '', issues_only: bool = False, q: str = Query('', max_length=200)):
+    def list_runs(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), mode: str = '', date_from: date | None = None, date_to: date | None = None, status: str = '', category: str = '', issues_only: bool = False, unannotated: bool = False, label: str = '', q: str = Query('', max_length=200)):
         if date_from and date_to and date_from > date_to:
             raise DomainError(422, '开始日期不能晚于结束日期')
-        return repository.list(page=page, page_size=page_size, mode=mode, date_from=str(date_from or ''), date_to=str(date_to or ''), status=status, category=category, issues_only=issues_only, q=q)
+        return repository.list(page=page, page_size=page_size, mode=mode, date_from=str(date_from or ''), date_to=str(date_to or ''), status=status, category=category, issues_only=issues_only, unannotated=unannotated, label=label, q=q)
 
     @app.get('/api/v1/runs/{run_id}', dependencies=[Depends(read_auth)])
     def get_run(run_id: str):
@@ -146,6 +147,45 @@ def create_app(settings: Settings | None = None):
         if number is None:
             raise DomainError(404, '未能在日志中定位到该时刻的发送命令，请手动搜索')
         return {'number': number}
+
+    @app.get('/api/v1/labels', dependencies=[Depends(read_auth)])
+    def list_labels():
+        return repository.list_labels()
+
+    @app.post('/api/v1/labels', dependencies=[Depends(read_auth)], status_code=201)
+    def create_label(data: Label):
+        return repository.add_label(secrets.token_hex(6), data.name, datetime.now(timezone.utc).isoformat())
+
+    @app.patch('/api/v1/labels/{label_id}', dependencies=[Depends(read_auth)])
+    def rename_label(label_id: str, data: Label):
+        return repository.rename_label(label_id, data.name)
+
+    @app.delete('/api/v1/labels/{label_id}', dependencies=[Depends(read_auth)])
+    def delete_label(label_id: str):
+        repository.delete_label(label_id)
+        return Response(status_code=204)
+
+    @app.get('/api/v1/runs/{run_id}/annotations', dependencies=[Depends(read_auth)])
+    def list_annotations(run_id: str):
+        return repository.list_annotations(run_id)
+
+    @app.get('/api/v1/runs/{run_id}/meta', dependencies=[Depends(read_auth)])
+    def get_run_meta(run_id: str):
+        service.detail(run_id)
+        return repository.get_run_meta(run_id)
+
+    @app.put('/api/v1/runs/{run_id}/meta', dependencies=[Depends(read_auth)])
+    def put_run_meta(run_id: str, data: RunMetaPut):
+        return service.upsert_run_meta(run_id, data)
+
+    @app.put('/api/v1/runs/{run_id}/results/{result_index}/annotation', dependencies=[Depends(read_auth)])
+    def put_annotation(run_id: str, result_index: int, data: AnnotationPut):
+        return service.upsert_annotation(run_id, result_index, data)
+
+    @app.delete('/api/v1/runs/{run_id}/results/{result_index}/annotation', dependencies=[Depends(read_auth)])
+    def remove_annotation(run_id: str, result_index: int):
+        service.delete_annotation(run_id, result_index)
+        return Response(status_code=204)
 
     static = Path(__file__).parent / 'static'
     if static.is_dir():

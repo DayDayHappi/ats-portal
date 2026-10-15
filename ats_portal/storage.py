@@ -110,11 +110,14 @@ class LocalStorage:
         return {'lines': lines, 'has_more': more, 'next_start': lines[-1]['number'] + 1 if lines else start}
 
     def search(self, path, query, start, limit):
+        # Scan to EOF so a match anywhere in the file is found in one request;
+        # the response size stays bounded by ``limit``. Sequential scans are the
+        # same cost ``lines``/``locate`` already accept for deep reads.
         matches, scanned, last, more = [], 0, start-1, False
         for line, hit, length in self._lines(path, query):
             if line['number'] < start:
                 continue
-            if len(matches) >= limit or scanned >= 16 * 1024 * 1024:
+            if len(matches) >= limit:
                 more = True
                 break
             scanned += length

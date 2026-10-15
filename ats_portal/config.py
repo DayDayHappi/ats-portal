@@ -23,6 +23,7 @@ class Settings:
     upload_token: str = ''
     timezone: str = 'Asia/Shanghai'
     rules_path: Path = field(default_factory=lambda: Path(__file__).parent.parent / 'config/rules.json')
+    labels_path: Path = field(default_factory=lambda: Path(__file__).parent.parent / 'config/labels.json')
     max_file_bytes: int = 512 * 1024 * 1024
     max_run_bytes: int = 2 * 1024 * 1024 * 1024
     max_report_bytes: int = 16 * 1024 * 1024
@@ -32,6 +33,7 @@ class Settings:
     def __post_init__(self):
         self.data_dir = Path(self.data_dir).expanduser().resolve()
         self.rules_path = Path(self.rules_path).expanduser().resolve()
+        self.labels_path = Path(self.labels_path).expanduser().resolve()
         ZoneInfo(self.timezone)
         if min(self.max_file_bytes, self.max_run_bytes, self.max_report_bytes) < 1:
             raise ValueError('文件大小限制必须大于 0')
@@ -48,6 +50,7 @@ class Settings:
             upload_token=token,
             timezone=env.get('ATS_PORTAL_TIMEZONE', 'Asia/Shanghai'),
             rules_path=Path(env.get('ATS_PORTAL_RULES', str(Path(__file__).parent.parent / 'config/rules.json'))),
+            labels_path=Path(env.get('ATS_PORTAL_LABELS', str(Path(__file__).parent.parent / 'config/labels.json'))),
             max_file_bytes=int(env.get('ATS_PORTAL_MAX_FILE_MB', '512')) * 1024**2,
             max_run_bytes=int(env.get('ATS_PORTAL_MAX_RUN_MB', '2048')) * 1024**2,
             require_read_auth=env.get('ATS_PORTAL_READ_AUTH', 'false').lower() == 'true',

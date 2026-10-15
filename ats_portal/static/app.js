@@ -12,7 +12,7 @@ function logText(text){
 const LOG_BATCH_SIZE=300;
 const LOG_WINDOW_SIZE=900;
 const newLog = (values={}) => ({name:'',start:1,next:1,query:'',search:false,hasMore:false,history:[],lines:[],loading:false,loadError:null,lastScroll:0,target:null,locate:null,...values});
-const state = {filters:{mode:'',date_from:'',date_to:'',status:'',category:'',q:'',issues_only:false}, page:1, pageSize:15, options:{modes:[],categories:[],timezone:'Asia/Shanghai'}, current:null, tab:'results', issuePage:1, log:newLog(), version:0, logVersion:0};
+const state = {filters:{mode:'',date_from:'',date_to:'',status:'',category:'',label:'',q:'',issues_only:false,unannotated:false}, page:1, pageSize:15, options:{modes:[],categories:[],labels:[],timezone:'Asia/Shanghai'}, current:null, tab:'results', issuePage:1, log:newLog(), version:0, logVersion:0};
 let listVersion=0;
 const main = $('#main');
 const statusLabels = {PASS:'通过',FAIL:'失败',ERROR:'执行错误',SKIP:'跳过',ABORTED:'已中止',UNKNOWN:'待确认'};
@@ -29,7 +29,7 @@ const errorHtml = message => `<div class="error-box" role="alert">${esc(message)
 
 // Filter/page persistence (localStorage). Issues-only follows the nav state, not persisted.
 const FILTER_KEY = 'ats-portal:filters';
-const FILTER_FIELDS = ['mode', 'date_from', 'date_to', 'status', 'category', 'q'];
+const FILTER_FIELDS = ['mode', 'date_from', 'date_to', 'status', 'category', 'label', 'q'];
 function saveFilters(){
   try{
     const {issues_only, ...rest} = state.filters;
@@ -119,7 +119,8 @@ function renderList(){
     <div class="field mode"><label for="mode-filter">压测模式</label><select id="mode-filter" name="mode">${options(state.options.modes,f.mode,'全部模式')}</select></div>
     <div class="field"><label for="status-filter">测试结果</label><select id="status-filter" name="status">${options(Object.entries(statusLabels).map(([id,name])=>({id,name})),f.status,'全部结果')}</select></div>
     <div class="field"><label for="category-filter">问题分类</label><select id="category-filter" name="category">${options(state.options.categories,f.category,'全部分类')}</select></div>
-    <div class="filter-row"><div class="field search"><input type="search" name="q" value="${esc(f.q)}" placeholder="搜索模式或运行编号" aria-label="搜索模式或运行编号"></div><button class="button soft" type="submit">筛选</button><label class="checkbox"><input name="issues_only" type="checkbox" ${f.issues_only?'checked':''}>仅看有问题的运行</label><button class="button link" type="button" data-action="reset">重置筛选</button><span class="filter-summary">按测试开始日期归档</span></div>
+    <div class="field"><label for="label-filter">根因标签</label><select id="label-filter" name="label">${options(state.options.labels,f.label,'全部标签')}</select></div>
+    <div class="filter-row"><div class="field search"><input type="search" name="q" value="${esc(f.q)}" placeholder="搜索模式或运行编号" aria-label="搜索模式或运行编号"></div><button class="button soft" type="submit">筛选</button><label class="checkbox"><input name="issues_only" type="checkbox" ${f.issues_only?'checked':''}>仅看有问题的运行</label><label class="checkbox"><input name="unannotated" type="checkbox" ${f.unannotated?'checked':''}>仅看未标注</label><button class="button link" type="button" data-action="reset">重置筛选</button><span class="filter-summary">按测试开始日期归档</span></div>
   </form><div class="list-heading"><h2>运行记录 <span id="total-count" class="counter">—</span></h2><span class="muted">最近执行优先</span></div><div id="run-list">${listSkeleton()}</div></section>`;
   renderMetrics({runs:'—',passed:'—',with_issues:'—',issues:'—',complete:0},true);
 }
@@ -139,7 +140,7 @@ async function loadList(){
     renderMetrics(data.stats);
     $('#total-count').textContent=data.total;
     if(!data.items.length){$('#run-list').innerHTML=empty(data.total?'这一页没有记录':'没有符合条件的运行',state.options.modes.length?'调整日期或筛选条件后再试。':'ATS 完成测试并上报后，记录会出现在这里。');return;}
-    $('#run-list').innerHTML=`<div class="table-scroll"><table class="runs-table"><thead><tr><th>压测模式 / 运行编号</th><th>开始时间</th><th>测试结果</th><th>用例结果</th><th>问题记录</th><th aria-label="查看详情"></th></tr></thead><tbody>${data.items.map(run=>`<tr><td><a class="run-title" href="#runs/${encodeURIComponent(run.id)}">${esc(run.mode.name)}</a><span class="run-id">${esc(run.id)}</span></td><td class="time-cell">${esc(fmt(run.started_at).split(' ')[0])}<small>${esc(fmt(run.started_at).split(' ').slice(1).join(' '))}</small></td><td>${badge(run.status,run.upload_state!=='complete')}</td><td>${progress(run.summary)}</td><td>${run.issue_count?`<span class="issue-count">${run.issue_count} 条问题</span><span class="issue-labels">${esc(run.categories.map(c=>c.name).slice(0,2).join(' · '))}</span>`:'<span class="no-issues">—</span>'}</td><td><a href="#runs/${encodeURIComponent(run.id)}" class="arrow-link" aria-label="查看 ${esc(run.mode.name)} 详情">›</a></td></tr>`).join('')}</tbody></table></div><div class="pagination"><span>共 ${data.total} 次运行 · 每页 ${state.pageSize} 条</span><div class="pagination-controls"><button class="button" data-action="prev-page" ${data.page===1?'disabled':''}>上一页</button><span>${data.page} / ${Math.max(1,Math.ceil(data.total/state.pageSize))}</span><button class="button" data-action="next-page" ${data.page*state.pageSize>=data.total?'disabled':''}>下一页</button></div></div>`;
+    $('#run-list').innerHTML=`<div class="table-scroll"><table class="runs-table"><thead><tr><th>压测模式 / 运行编号</th><th>开始时间</th><th>测试结果</th><th>用例结果</th><th>问题记录</th><th aria-label="查看详情"></th></tr></thead><tbody>${data.items.map(run=>`<tr><td><a class="run-title" href="#runs/${encodeURIComponent(run.id)}">${esc(run.mode.name)}</a><span class="run-id">${esc(run.id)}</span></td><td class="time-cell">${esc(fmt(run.started_at).split(' ')[0])}<small>${esc(fmt(run.started_at).split(' ').slice(1).join(' '))}</small></td><td>${badge(run.status,run.upload_state!=='complete')}</td><td>${progress(run.summary)}</td><td>${run.issue_count?`<span class="issue-count">${run.issue_count} 条问题</span><span class="issue-labels">${esc(run.categories.map(c=>c.name).slice(0,2).join(' · '))}</span>`:'<span class="no-issues">—</span>'}${run.attention_count>run.annotated_count?`<span class="pending-badge">${run.attention_count-run.annotated_count} 待标注</span>`:''}</td><td><a href="#runs/${encodeURIComponent(run.id)}" class="arrow-link" aria-label="查看 ${esc(run.mode.name)} 详情">›</a></td></tr>`).join('')}</tbody></table></div><div class="pagination"><span>共 ${data.total} 次运行 · 每页 ${state.pageSize} 条</span><div class="pagination-controls"><button class="button" data-action="prev-page" ${data.page===1?'disabled':''}>上一页</button><span>${data.page} / ${Math.max(1,Math.ceil(data.total/state.pageSize))}</span><button class="button" data-action="next-page" ${data.page*state.pageSize>=data.total?'disabled':''}>下一页</button></div></div>`;
     document.querySelectorAll('[data-width]').forEach(e=>e.style.width=`${Number(e.dataset.width)||0}%`);
   }catch(error){if(version===listVersion&&$('#run-list'))$('#run-list').innerHTML=errorHtml(error.message);}
 }
@@ -147,8 +148,18 @@ async function loadList(){
 function renderDetail(){
   const r=state.current;
   const wall=r.ended_at?duration(new Date(r.ended_at)-new Date(r.started_at)):'未记录结束时间';
-  main.innerHTML=`<a href="#runs" class="back-link" aria-label="返回测试记录">‹ 返回测试记录</a><div class="page-heading detail-heading"><div><div class="eyebrow">EXECUTION DETAILS</div><h1>${esc(r.mode.name)}</h1><span class="run-id">${esc(r.id)}</span><button class="copy-run-id button link" data-action="copy-run-id" title="复制运行编号" aria-label="复制运行编号">⧉</button></div>${badge(r.status,r.upload_state!=='complete')}</div><dl class="panel detail-meta">${[['开始时间',fmt(r.started_at)],['结束时间',fmt(r.ended_at)],['运行时长',wall],['执行主机',r.source.host||'未记录'],['设备 / 固件',[r.source.device,r.source.firmware].filter(Boolean).join(' / ')||'未记录'],['归档日期',r.run_date],['收到时间',fmt(r.received_at)],['资料状态',r.upload_state==='complete'?'已完整归档':'等待文件接收 / 归档确认']].map(([k,v])=>`<div class="meta-item"><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl><section class="panel"><div class="detail-total"><span>用例总数<b>${r.summary.total}</b></span><span>通过<b>${r.summary.passed}</b></span><span>失败 / 错误<b>${r.summary.failed+r.summary.errored}</b></span><span>跳过<b>${r.summary.skipped}</b></span><span>问题记录<b>${r.issue_count}</b></span></div><div class="tabs" role="tablist" aria-label="运行详情"><button role="tab" data-tab="results">用例结果 (${r.results.length})</button><button role="tab" data-tab="issues">问题 (${r.issues.length})</button><button role="tab" data-tab="logs">原始日志 (${r.artifacts.length})</button></div><div class="tab-content" id="tab-content" role="tabpanel"></div></section>`;
+  main.innerHTML=`<a href="#runs" class="back-link" aria-label="返回测试记录">‹ 返回测试记录</a><div class="page-heading detail-heading"><div><div class="eyebrow">EXECUTION DETAILS</div><h1>${esc(r.mode.name)}</h1><span class="run-id">${esc(r.id)}</span><button class="copy-run-id button link" data-action="copy-run-id" title="复制运行编号" aria-label="复制运行编号">⧉</button></div>${badge(r.status,r.upload_state!=='complete')}</div><dl class="panel detail-meta">${[['开始时间',fmt(r.started_at)],['结束时间',fmt(r.ended_at)],['运行时长',wall],['执行主机',r.source.host||'未记录'],['设备 / 固件',renderMeta(r)],['归档日期',r.run_date],['收到时间',fmt(r.received_at)],['资料状态',r.upload_state==='complete'?'已完整归档':'等待文件接收 / 归档确认']].map(([k,v])=>`<div class="meta-item"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl><section class="panel"><div class="detail-total"><span>用例总数<b>${r.summary.total}</b></span><span>通过<b>${r.summary.passed}</b></span><span>失败 / 错误<b>${r.summary.failed+r.summary.errored}</b></span><span>跳过<b>${r.summary.skipped}</b></span><span>问题记录<b>${r.issue_count}</b></span><span>需关注<b>${r.attention_count??'—'}</b></span><span>已标注<b>${(r.annotations||[]).length}</b></span></div><div class="tabs" role="tablist" aria-label="运行详情"><button role="tab" data-tab="results">用例结果 (${r.results.length})</button><button role="tab" data-tab="issues">问题 (${r.issues.length})</button><button role="tab" data-tab="logs">原始日志 (${r.artifacts.length})</button></div><div class="tab-content" id="tab-content" role="tabpanel"></div></section>`;
   renderTab();
+}
+
+function renderMeta(r){
+  const m=r.meta;
+  const device=m?.device||r.source.device;
+  const firmware=m?.firmware||r.source.firmware;
+  const shown=[device,firmware].filter(Boolean).join(' / ')||'未记录';
+  const edit=r.upload_state==='complete'?`<button class="button link meta-edit" data-action="edit-meta" title="编辑设备 / 固件" aria-label="编辑设备 / 固件">✎</button>`:'';
+  const by=m?`<small class="meta-by">${esc(m.author||'未署名')} · ${esc(fmt(m.updated_at))}</small>`:'';
+  return `<span class="meta-value">${esc(shown)}${edit}</span>${by}`;
 }
 
 function renderTab(){
@@ -344,8 +355,8 @@ async function loadLog(target=null){
     const data=await api(`${base}/search?${query}`);
     if(token!==state.logVersion||!$('#log-content'))return;
     l.next=data.next_start;l.hasMore=data.has_more;
-    $('#log-content').innerHTML=data.matches.length?data.matches.map(line=>`<button class="search-result" data-action="context" data-line="${line.number}" aria-label="第 ${line.number} 行：查看上下文"><span>第 ${line.number} 行</span><span>${logText(line.text)}${line.truncated?' …（长行已折叠，匹配可能位于隐藏部分）':''}</span></button>`).join(''):`<div class="log-message">本段未找到匹配${data.has_more?'，可继续搜索下一段。':'。'}</div>`;
-    $('#log-range').textContent=`本段找到 ${data.matches.length} 行 · ${data.has_more?'还有后续内容':'已到文件末尾'}`;
+    $('#log-content').innerHTML=data.matches.length?data.matches.map(line=>`<button class="search-result" data-action="context" data-line="${line.number}" aria-label="第 ${line.number} 行：查看上下文"><span>第 ${line.number} 行</span><span>${logText(line.text)}${line.truncated?' …（长行已折叠，匹配可能位于隐藏部分）':''}</span></button>`).join(''):`<div class="log-message">整个文件都没有找到匹配。${l.history.length?'可点击“上一段”返回上一批结果。':''}</div>`;
+    $('#log-range').textContent=`找到 ${data.matches.length} 行${data.matches.length>=50?'（仅显示前 50 条）':''} · ${data.has_more?'还有更多匹配，点击“下一段”继续':'已搜索到文件末尾'}`;
     $('[data-action="log-prev"]').disabled=!l.history.length;
     $('[data-action="log-next"]').disabled=!l.hasMore;
     $('#log-content').scrollTop=0;
@@ -355,9 +366,104 @@ async function loadLog(target=null){
 
 function readFilters(){
   const form=$('#filter-form');
-  for(const key of Object.keys(state.filters))state.filters[key]=key==='issues_only'?form.elements[key].checked:form.elements[key].value;
+  for(const key of Object.keys(state.filters))state.filters[key]=key==='issues_only'||key==='unannotated'?form.elements[key].checked:form.elements[key].value;
   state.page=1;
   saveFilters();
+}
+
+// ---- annotation dialog ----
+function currentAnnotation(index){
+  return (state.current?.annotations||[]).find(a=>a.result_index===index)||null;
+}
+function openAnnotationDialog(index){
+  const result=state.current?.results?.[index];
+  if(!result)return;
+  const dialog=$('#annotation-dialog');
+  const ann=currentAnnotation(index);
+  const selected=new Set(ann?ann.labels.map(l=>l.id):[]);
+  dialog._index=index;
+  $('#annotation-result-title').textContent=result.name||`原报告第 ${index+1} 条`;
+  $('#annotation-result-sub').textContent=`${result.module||'模块未标注'} · 原报告第 ${index+1} 条`;
+  $('#annotation-note').value=ann?.note||'';
+  $('#annotation-author').value=ann?.author||(localStorage.getItem('ats-portal:author')||'');
+  $('#annotation-error').textContent='';
+  $('#annotation-delete').hidden=!ann;
+  renderAnnotationLabels(selected);
+  dialog.showModal();
+}
+function renderAnnotationLabels(selected){
+  const box=$('#annotation-labels');
+  box.innerHTML=state.options.labels.map(l=>`<label class="annotation-label-option"><input type="checkbox" name="label" value="${esc(l.id)}" ${selected.has(l.id)?'checked':''}>${esc(l.name)}<small>${l.count||''}</small></label>`).join('')||'<span class="muted">暂无标签，请在下方新增。</span>';
+}
+function selectedLabelIds(){
+  return [...document.querySelectorAll('#annotation-labels input[name="label"]:checked')].map(el=>el.value);
+}
+async function refreshAnnotations(){
+  const run=state.current;
+  if(!run)return;
+  run.annotations=await api(`/runs/${encodeURIComponent(run.id)}/annotations`);
+  state.resultOverview=buildResultOverview(run);state.resultView=newResultView(state.resultOverview);
+  renderTab();
+}
+async function saveAnnotation(){
+  const index=$('#annotation-dialog')._index;
+  const labelIds=selectedLabelIds();
+  const note=$('#annotation-note').value;
+  const author=$('#annotation-author').value;
+  const err=$('#annotation-error');
+  if(!labelIds.length){err.textContent='请至少选择一个标签';return;}
+  localStorage.setItem('ats-portal:author',author);
+  try{
+    await api(`/runs/${encodeURIComponent(state.current.id)}/results/${index}/annotation`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({label_ids:labelIds,note,author})});
+    $('#annotation-dialog').close();
+    await refreshAnnotations();
+  }catch(error){err.textContent=error.message;}
+}
+async function deleteAnnotation(){
+  const index=$('#annotation-dialog')._index;
+  try{
+    await api(`/runs/${encodeURIComponent(state.current.id)}/results/${index}/annotation`,{method:'DELETE'});
+    $('#annotation-dialog').close();
+    await refreshAnnotations();
+  }catch(error){$('#annotation-error').textContent=error.message;}
+}
+async function addLabelInline(){
+  const input=$('#annotation-new-label');
+  const name=input.value.trim();
+  const err=$('#annotation-error');
+  if(!name){err.textContent='请输入标签名称';return;}
+  try{
+    const label=await api('/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    state.options.labels=[...state.options.labels.filter(l=>l.id!==label.id),label];
+    input.value='';
+    const selected=new Set(selectedLabelIds());
+    selected.add(label.id);
+    renderAnnotationLabels(selected);
+  }catch(error){err.textContent=error.message;}
+}
+
+// ---- device / firmware meta dialog ----
+function openMetaDialog(){
+  const r=state.current;
+  const m=r.meta;
+  $('#meta-device').value=m?.device||r.source.device||'';
+  $('#meta-firmware').value=m?.firmware||r.source.firmware||'';
+  $('#meta-author').value=m?.author||(localStorage.getItem('ats-portal:author')||'');
+  $('#meta-error').textContent='';
+  $('#meta-dialog').showModal();
+}
+async function saveMeta(){
+  const err=$('#meta-error');
+  const device=$('#meta-device').value.trim();
+  const firmware=$('#meta-firmware').value.trim();
+  const author=$('#meta-author').value.trim();
+  localStorage.setItem('ats-portal:author',author);
+  try{
+    const meta=await api(`/runs/${encodeURIComponent(state.current.id)}/meta`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({device,firmware,author})});
+    state.current.meta=meta;
+    $('#meta-dialog').close();
+    renderDetail();
+  }catch(error){err.textContent=error.message;}
 }
 
 main.addEventListener('submit',event=>{
@@ -381,7 +487,7 @@ main.addEventListener('click',event=>{
   const action=button.dataset.action;
   if(action==='refresh')return route();
   if(action==='reset'){
-    for(const k of Object.keys(state.filters))state.filters[k]=k==='issues_only'?location.hash==='#issues':'';
+    for(const k of Object.keys(state.filters))state.filters[k]=k==='issues_only'||k==='unannotated'?(k==='issues_only'&&location.hash==='#issues'):'';
     state.page=1;saveFilters();renderList();return loadList();
   }
   if(action==='prev-page'||action==='next-page'){state.page+=action==='prev-page'?-1:1;saveFilters();return loadList();}
@@ -418,6 +524,8 @@ main.addEventListener('click',event=>{
     openResultLog('', '', result);
     state.tab='logs';return renderTab();
   }
+  if(action==='annotate'){openAnnotationDialog(Number(button.dataset.index));return;}
+  if(action==='edit-meta'){openMetaDialog();return;}
   if(action==='log-next'){state.log.history.push(state.log.start);state.log.start=state.log.next;return loadLog();}
   if(action==='log-prev'){state.log.start=state.log.history.pop()??1;return loadLog();}
   if(action==='context'){const line=Number(button.dataset.line);state.log.history=[];state.log.search=false;state.log.start=Math.max(1,line-10);return loadLog(line);}
@@ -456,5 +564,12 @@ $('#auth-form').addEventListener('submit',async event=>{
     event.target.reset();$('#auth-error').textContent='';$('#auth-dialog').close();route();
   }catch(error){$('#auth-error').textContent=error.message;}
 });
+$('#annotation-save').addEventListener('click',saveAnnotation);
+$('#annotation-delete').addEventListener('click',deleteAnnotation);
+$('#annotation-add-label').addEventListener('click',addLabelInline);
+$('[data-action="annotation-cancel"]').addEventListener('click',()=>$('#annotation-dialog').close());
+$('#meta-save').addEventListener('click',saveMeta);
+$('[data-action="meta-cancel"]').addEventListener('click',()=>$('#meta-dialog').close());
+$('#annotation-new-label').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();addLabelInline();}});
 window.addEventListener('hashchange',route);
 route();
