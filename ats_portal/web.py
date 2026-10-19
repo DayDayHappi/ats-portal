@@ -12,9 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import ai as ai_module
 from .classifier import Classifier
 from .config import Settings
-from .models import AnnotationPut, DomainError, Label, Manifest, RunMetaPut
+from .models import AnalysisRunPost, AnnotationPut, DomainError, Label, Manifest, RunMetaPut, TrendsPost
 from .repository import Repository, load_label_seed
 from .service import IngestionService
 from .storage import LocalStorage
@@ -28,7 +29,8 @@ def create_app(settings: Settings | None = None):
     settings = settings or Settings.from_env()
     repository = Repository(settings.data_dir / 'portal.sqlite3', labels=load_label_seed(settings.labels_path))
     storage = LocalStorage(settings.data_dir / 'artifacts')
-    service = IngestionService(settings, repository, storage, Classifier(settings.rules_path))
+    ai = ai_module.AIClient(settings.ai_base_url, settings.ai_api_key, settings.ai_model, settings.ai_timeout_seconds) if settings.ai_enabled else None
+    service = IngestionService(settings, repository, storage, Classifier(settings.rules_path), ai=ai)
     app = FastAPI(title='ATS Portal', version='1.0.0', docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
     app.state.service = service
@@ -84,7 +86,7 @@ def create_app(settings: Settings | None = None):
 
     @app.get('/api/v1/options', dependencies=[Depends(read_auth)])
     def options():
-        return {**repository.options(), 'timezone': settings.timezone, 'rules_version': service.classifier.version}
+        return {**repository.options(), 'timezone': settings.timezone, 'rules_version': service.classifier.version, 'ai_enabled': settings.ai_enabled, 'ai_model': settings.ai_model if settings.ai_enabled else ''}
 
     @app.post('/api/v1/runs', dependencies=[Depends(upload_auth)])
     async def register(request: Request):
@@ -186,6 +188,14 @@ def create_app(settings: Settings | None = None):
     def remove_annotation(run_id: str, result_index: int):
         service.delete_annotation(run_id, result_index)
         return Response(status_code=204)
+
+    @app.post('/api/v1/runs/{run_id}/analysis', dependencies=[Depends(read_auth)])
+    def analyze_run(run_id: str, data: AnalysisRunPost):
+        return service.analyze_run(run_id, data.refresh)
+
+    @app.post('/api/v1/analysis/trends', dependencies=[Depends(read_auth)])
+    def analyze_trends(data: TrendsPost):
+        return service.analyze_trends(data.mode, data.date_from, data.date_to, data.refresh)
 
     static = Path(__file__).parent / 'static'
     if static.is_dir():

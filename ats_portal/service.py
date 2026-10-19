@@ -3,14 +3,16 @@ import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from . import ai as ai_module
 from .adapter import normalize_report, summarize
 from .classifier import attention_indices
 from .models import AnnotationPut, DomainError, Manifest, RunMetaPut
 
 
 class IngestionService:
-    def __init__(self, settings, repository, storage, classifier):
+    def __init__(self, settings, repository, storage, classifier, ai=None):
         self.settings, self.repository, self.storage, self.classifier = settings, repository, storage, classifier
+        self.ai = ai
 
     def register(self, manifest: Manifest):
         self.storage.validate_manifest(manifest.run_id, [a.model_dump() for a in manifest.artifacts])
@@ -88,3 +90,85 @@ class IngestionService:
         if run['upload_state'] != 'complete':
             raise DomainError(409, '运行尚未归档完成，暂不能标注')
         self.repository.delete_annotation(run_id, result_index)
+
+    # ---- AI analysis ----
+
+    def _require_ai(self):
+        if not self.settings.ai_enabled or self.ai is None:
+            raise DomainError(503, '未配置 AI 服务，请设置 ATS_PORTAL_AI_BASE_URL / ATS_PORTAL_AI_API_KEY / ATS_PORTAL_AI_MODEL 后重启服务')
+
+    @staticmethod
+    def _attention_items(run):
+        """(result, issue|None) pairs needing attention, plus run-level issues."""
+        results = run.get('results', [])
+        issues = run.get('issues', [])
+        indices = attention_indices(results, issues)
+        by_index = {}
+        for issue in issues:
+            ri = issue.get('result_index')
+            if ri is not None and ri in indices:
+                by_index.setdefault(ri, issue)
+        items = [(r, by_index.get(r['index'])) for r in results if r['index'] in indices]
+        run_level = [i for i in issues if i.get('result_index') is None]
+        return items, run_level
+
+    def analyze_run(self, run_id, refresh=False):
+        self._require_ai()
+        run = self.repository.get(run_id)
+        if run['upload_state'] != 'complete':
+            raise DomainError(409, '运行尚未归档完成，暂不能分析')
+        scope, kind = f'run:{run_id}', 'root_cause'
+        if not refresh:
+            cached = self.repository.get_analysis(scope, kind)
+            if cached:
+                return {**cached, 'cached': True}
+        items, run_level = self._attention_items(run)
+        contexts = ai_module.extract_log_context(run, self.storage, items, self.settings.timezone)
+        # Cross-run PASS contrast, bounded.
+        contrasts = []
+        seen = set()
+        for result, _issue in items[:6]:
+            key = (result.get('scenario', ''), result.get('module', ''), result.get('name', ''))
+            if key in seen:
+                continue
+            seen.add(key)
+            hits = self.repository.find_similar_pass_results(
+                run['mode']['id'], {'scenario': key[0], 'module': key[1], 'name': key[2]}, run_id, limit=2)
+            for hit in hits[:2]:
+                other = self.repository.get(hit['run_id'])
+                if not hit.get('timestamp'):
+                    continue
+                loc = ai_module.locate_time(hit['timestamp'], hit.get('elapsed_ms', 0), other.get('started_at', ''), self.settings.timezone)
+                if not loc:
+                    continue
+                artifact = ai_module._choose_log_file(other, self.storage)
+                if artifact is None:
+                    continue
+                path = self.storage.path(hit['run_id'], artifact['name'])
+                n = self.storage.locate(path, loc['at'], day_offset=loc.get('day', 0))
+                if not n:
+                    continue
+                lines = [l['text'] for l in self.storage.lines(path, max(1, n - 10), ai_module.EXCERPT_LINES)['lines']]
+                contrasts.append({'run_id': hit['run_id'], 'started_at': other.get('started_at', ''), 'test_item': result.get('name', ''), 'status': hit['status'], 'lines': lines})
+        user = ai_module.build_root_cause_user(run, contexts, contrasts, run_level)
+        raw = self.ai.chat(ai_module.ROOT_CAUSE_SYSTEM, user)
+        payload = ai_module.normalize_root_cause(ai_module.parse_json(raw) or raw)
+        now = datetime.now(timezone.utc).isoformat()
+        self.repository.upsert_analysis(scope, kind, payload, self.settings.ai_model, now)
+        return {'cached': False, 'analysis': payload, 'model': self.settings.ai_model, 'created_at': now}
+
+    def analyze_trends(self, mode='', date_from='', date_to='', refresh=False):
+        self._require_ai()
+        scope = f"trend:{mode or 'all'}:{date_from or ''}:{date_to or ''}"
+        kind = 'trends'
+        if not refresh:
+            cached = self.repository.get_analysis(scope, kind)
+            if cached:
+                return {**cached, 'cached': True}
+        snapshot = self.repository.trend_snapshot(mode, date_from, date_to)
+        user = ai_module.build_trends_user(snapshot, mode, date_from, date_to)
+        raw = self.ai.chat(ai_module.TRENDS_SYSTEM, user)
+        payload = ai_module.normalize_trends(ai_module.parse_json(raw) or raw)
+        now = datetime.now(timezone.utc).isoformat()
+        self.repository.upsert_analysis(scope, kind, payload, self.settings.ai_model, now)
+        return {'cached': False, 'analysis': payload, 'model': self.settings.ai_model, 'created_at': now}

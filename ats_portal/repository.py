@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from .classifier import attention_indices
 from .models import DomainError
 
-_SCHEMA_V3 = '''
+_SCHEMA_V4 = '''
 CREATE TABLE runs (
     id TEXT PRIMARY KEY, manifest TEXT NOT NULL,
     mode_id TEXT NOT NULL, mode_name TEXT NOT NULL,
@@ -53,7 +53,15 @@ CREATE TABLE run_meta (
     author TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
 );
-PRAGMA user_version=3;
+CREATE TABLE ai_analyses (
+    scope TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (scope, kind)
+);
+PRAGMA user_version=4;
 '''
 
 
@@ -77,15 +85,19 @@ class Repository:
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 3:
+            if version > 4:
                 raise RuntimeError('数据库来自更新版本，请升级程序，禁止降级覆盖数据')
             if version == 0:
-                db.executescript(_SCHEMA_V3)
+                db.executescript(_SCHEMA_V4)
             elif version == 1:
                 self._migrate_v1_to_v2(db)
                 self._migrate_v2_to_v3(db)
+                self._migrate_v3_to_v4(db)
             elif version == 2:
                 self._migrate_v2_to_v3(db)
+                self._migrate_v3_to_v4(db)
+            elif version == 3:
+                self._migrate_v3_to_v4(db)
             self._seed_labels(db)
 
     def _migrate_v1_to_v2(self, db):
@@ -105,6 +117,10 @@ class Repository:
     def _migrate_v2_to_v3(self, db):
         db.execute('CREATE TABLE run_meta (run_id TEXT PRIMARY KEY REFERENCES runs(id), device TEXT NOT NULL DEFAULT "", firmware TEXT NOT NULL DEFAULT "", author TEXT NOT NULL DEFAULT "", updated_at TEXT NOT NULL)')
         db.execute('PRAGMA user_version=3')
+
+    def _migrate_v3_to_v4(self, db):
+        db.execute('CREATE TABLE ai_analyses (scope TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, model TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (scope, kind))')
+        db.execute('PRAGMA user_version=4')
 
     def _seed_labels(self, db):
         if not self.labels:
@@ -300,3 +316,52 @@ class Repository:
             db.execute('BEGIN IMMEDIATE')
             db.execute('INSERT INTO run_meta(run_id,device,firmware,author,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET device=excluded.device, firmware=excluded.firmware, author=excluded.author, updated_at=excluded.updated_at', (run_id, device, firmware, author, now))
         return self.get_run_meta(run_id)
+
+    def get_analysis(self, scope, kind):
+        with self.connect() as db:
+            row = db.execute('SELECT payload, model, created_at FROM ai_analyses WHERE scope=? AND kind=?', (scope, kind)).fetchone()
+        if not row:
+            return None
+        return {'analysis': json.loads(row['payload']), 'model': row['model'], 'created_at': row['created_at']}
+
+    def upsert_analysis(self, scope, kind, payload, model, created_at):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('INSERT INTO ai_analyses(scope,kind,payload,model,created_at) VALUES(?,?,?,?,?) ON CONFLICT(scope,kind) DO UPDATE SET payload=excluded.payload, model=excluded.model, created_at=excluded.created_at', (scope, kind, json.dumps(payload, ensure_ascii=False), model, created_at))
+        return self.get_analysis(scope, kind)
+
+    def find_similar_pass_results(self, mode_id, key_fields, exclude_run_id, limit=3, scan_runs=60):
+        """Return recent PASS results matching (scenario, module, name).
+
+        Scans at most ``scan_runs`` completed runs of ``mode_id`` (newest first),
+        parsing each run's payload to find matching PASS/SKIP records. Bounded so
+        a single analysis never parses an unbounded number of payloads.
+        """
+        scenario, module, name = key_fields['scenario'], key_fields['module'], key_fields['name']
+        with self.connect() as db:
+            rows = db.execute('SELECT id, payload FROM runs WHERE upload_state=? AND mode_id=? ORDER BY started_epoch DESC LIMIT ?', ('complete', mode_id, scan_runs)).fetchall()
+        matches = []
+        for row in rows:
+            if row['id'] == exclude_run_id or len(matches) >= limit:
+                continue
+            payload = json.loads(row['payload'])
+            for r in payload.get('results', []):
+                if r.get('status') in ('PASS', 'SKIP') and r.get('scenario') == scenario and r.get('module') == module and r.get('name') == name:
+                    matches.append({'run_id': row['id'], 'started_at': payload.get('started_at', ''), 'timestamp': r.get('timestamp', ''), 'elapsed_ms': r.get('elapsed_ms', 0), 'status': r['status']})
+                    if len(matches) >= limit:
+                        break
+        return matches
+
+    def trend_snapshot(self, mode='', date_from='', date_to='', limit=200):
+        """Lightweight projection of completed runs for cross-run trend analysis."""
+        where, args = self._filters(mode=mode, date_from=date_from, date_to=date_to)
+        clause = (where + ' AND upload_state=?' if where else ' WHERE upload_state=?')
+        args = [*args, 'complete']
+        with self.connect() as db:
+            rows = db.execute('SELECT id, started_at, status, issue_count, payload FROM runs' + clause + ' ORDER BY started_epoch DESC LIMIT ?', [*args, limit]).fetchall()
+        snapshot = []
+        for row in rows:
+            payload = json.loads(row['payload'])
+            attention = [{'name': r.get('name', ''), 'module': r.get('module', ''), 'scenario': r.get('scenario', ''), 'status': r.get('status', '')} for r in payload.get('results', []) if r.get('status') not in ('PASS', 'SKIP')]
+            snapshot.append({'run_id': row['id'], 'mode_name': payload.get('mode', {}).get('name', ''), 'started_at': row['started_at'], 'status': row['status'], 'issue_count': row['issue_count'], 'summary': payload.get('summary', {}), 'attention': attention})
+        return snapshot

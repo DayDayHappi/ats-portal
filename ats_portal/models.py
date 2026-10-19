@@ -81,6 +81,17 @@ class RunMetaPut(BaseModel):
         return v.strip()
 
 
+class AnalysisRunPost(BaseModel):
+    refresh: bool = False
+
+
+class TrendsPost(BaseModel):
+    mode: str = Field(default='', max_length=160)
+    date_from: str = Field(default='', max_length=10)
+    date_to: str = Field(default='', max_length=10)
+    refresh: bool = False
+
+
 class Manifest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     schema_version: Literal[1] = 1

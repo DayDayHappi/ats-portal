@@ -409,7 +409,7 @@ def test_migration_v1_to_v2(tmp_path):
         db.execute('INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', ('old-1', '{}', 'm', 'm', '2026-09-28T10:00:00+08:00', 0.0, '2026-09-28', 'now', 'complete', 'FAIL', 1, json.dumps(payload)))
     repo = Repository(db_path, labels=[{'id': 'seed', 'name': '播种标签'}])
     with repo.connect() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 4
         assert db.execute('SELECT attention_count FROM runs WHERE id=?', ('old-1',)).fetchone()[0] == 1
         assert db.execute('SELECT name FROM labels WHERE id=?', ('seed',)).fetchone()[0] == '播种标签'
         # run_meta table exists from the v2→v3 step
@@ -466,3 +466,125 @@ def test_future_schema_rejected(tmp_path):
         db.execute('PRAGMA user_version=99')
     with pytest.raises(RuntimeError):
         Repository(db_path)
+
+
+# ---- AI analysis ----
+
+FAKE_AI = {'summary': '疑似电源时序问题', 'findings': [{'test_item': 'video[3k]', 'cycle': 2, 'rep': 3, 'status': 'FAIL', 'likely_root_cause': '电压跌落', 'evidence': 'TT ERROR camera', 'confidence': '中', 'suggested_action': '检查电源'}]}
+
+
+class FakeAI:
+    def __init__(self):
+        self.calls = 0
+
+    def chat(self, system, user):
+        self.calls += 1
+        return json.dumps(FAKE_AI, ensure_ascii=False)
+
+
+def enable_ai(settings):
+    settings.ai_base_url = 'http://127.0.0.1:9/v1'
+    settings.ai_api_key = 'test-key'
+    settings.ai_model = 'test-model'
+    return settings
+
+
+def with_fake_ai(client):
+    fake = FakeAI()
+    client.app.state.service.ai = fake
+    return fake
+
+
+def test_ai_disabled_returns_503(client):
+    upload(client)
+    assert client.post('/api/v1/runs/run-1/analysis', json={}).status_code == 503
+
+
+def test_options_expose_ai_enabled(settings):
+    enable_ai(settings)
+    with TestClient(create_app(settings)) as c:
+        opts = c.get('/api/v1/options').json()
+        assert opts['ai_enabled'] is True
+        assert opts['ai_model'] == 'test-model'
+
+
+def test_run_analysis_cache_and_refresh(settings, client):
+    enable_ai(settings)
+    fake = with_fake_ai(client)
+    upload(client)
+    first = client.post('/api/v1/runs/run-1/analysis', json={}).json()
+    assert first['cached'] is False
+    assert first['analysis']['summary'] == '疑似电源时序问题'
+    assert fake.calls == 1
+    second = client.post('/api/v1/runs/run-1/analysis', json={}).json()
+    assert second['cached'] is True
+    assert fake.calls == 1
+    third = client.post('/api/v1/runs/run-1/analysis', json={'refresh': True}).json()
+    assert third['cached'] is False
+    assert fake.calls == 2
+
+
+def test_run_analysis_requires_complete(client):
+    enable_ai(client.app.state.service.settings)
+    with_fake_ai(client)
+    m, _ = bundle()
+    client.post('/api/v1/runs', json=m, headers=HEADERS)
+    assert client.post('/api/v1/runs/run-1/analysis', json={}).status_code == 409
+
+
+def test_run_analysis_auth(settings):
+    enable_ai(settings)
+    settings.require_read_auth = True
+    with TestClient(create_app(settings)) as c:
+        assert c.post('/api/v1/runs/any/analysis', json={}).status_code == 401
+
+
+def test_trends_analysis_cache(settings, client):
+    enable_ai(settings)
+    fake = with_fake_ai(client)
+    upload(client)
+    m, f = bundle('run-2', 'another')
+    upload(client, m, f)
+    first = client.post('/api/v1/analysis/trends', json={}).json()
+    assert first['cached'] is False
+    assert fake.calls == 1
+    second = client.post('/api/v1/analysis/trends', json={}).json()
+    assert second['cached'] is True
+    assert fake.calls == 1
+
+
+def test_ai_non_json_response_falls_back(client):
+    enable_ai(client.app.state.service.settings)
+    fake = FakeAI()
+    fake.chat = lambda system, user: '这是一段纯文本结论'
+    client.app.state.service.ai = fake
+    upload(client)
+    result = client.post('/api/v1/runs/run-1/analysis', json={}).json()
+    assert result['analysis']['summary'] == '这是一段纯文本结论'
+    assert result['analysis']['findings'] == []
+
+
+def test_migration_v3_to_v4(tmp_path):
+    db_path = tmp_path / 'portal.sqlite3'
+    with sqlite3.connect(db_path) as db:
+        db.executescript('''
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY, manifest TEXT NOT NULL,
+            mode_id TEXT NOT NULL, mode_name TEXT NOT NULL,
+            started_at TEXT NOT NULL, started_epoch REAL NOT NULL,
+            run_date TEXT NOT NULL, received_at TEXT NOT NULL,
+            upload_state TEXT NOT NULL, status TEXT NOT NULL,
+            issue_count INTEGER NOT NULL DEFAULT 0,
+            payload TEXT NOT NULL, attention_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE issues (run_id TEXT NOT NULL REFERENCES runs(id), category TEXT NOT NULL, category_name TEXT NOT NULL);
+        CREATE TABLE labels (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
+        CREATE TABLE annotations (run_id TEXT NOT NULL REFERENCES runs(id), result_index INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', author TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (run_id, result_index));
+        CREATE TABLE annotation_labels (run_id TEXT NOT NULL, result_index INTEGER NOT NULL, label_id TEXT NOT NULL, label_name TEXT NOT NULL, PRIMARY KEY (run_id, result_index, label_id));
+        CREATE TABLE run_meta (run_id TEXT PRIMARY KEY REFERENCES runs(id), device TEXT NOT NULL DEFAULT '', firmware TEXT NOT NULL DEFAULT '', author TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL);
+        PRAGMA user_version=3;
+        ''')
+    repo = Repository(db_path)
+    with repo.connect() as db:
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 4
+        db.execute('SELECT scope, kind FROM ai_analyses LIMIT 0').fetchall()

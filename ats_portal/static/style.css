@@ -137,6 +137,26 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .meta-edit{border:1px solid var(--border);border-radius:4px;padding:1px 7px;font-size:.75rem;color:#7b8fa9;background:#fff;line-height:1.4}
 .meta-edit:hover{color:var(--blue);border-color:#c7dcf8}
 .meta-by{display:block;font-size:.7rem;color:#a0aaba;margin-top:5px}
+.analysis-panel{padding:6px 0}
+.analysis-placeholder{text-align:center;padding:34px 20px}
+.analysis-placeholder .empty-symbol{font-size:1.6rem;color:#b9c4d2;display:block;margin-bottom:8px}
+.analysis-placeholder h3{margin:0 0 6px;font-size:1rem}
+.analysis-placeholder p{max-width:460px;margin:0 auto 16px;color:#7b8fa9;font-size:.82rem;line-height:1.6}
+.analysis-loading{text-align:center;padding:30px 20px}
+.analysis-loading .skeleton{margin:0 auto 12px}
+.analysis-meta{font-size:.75rem;color:#9aa6b6}
+.analysis-summary{margin-bottom:14px;padding:14px;background:#f6f9fc;border:1px solid #e4ebf3;border-radius:6px}
+.analysis-summary h3{margin:0 0 6px;font-size:.85rem;color:#33465d}
+.analysis-summary p{margin:0;font-size:.85rem;line-height:1.65;color:#44556d;white-space:pre-wrap}
+.analysis-actions{display:flex;justify-content:flex-end;margin:0 0 14px}
+.analysis-finding{border:1px solid #e6ecf3;border-radius:6px;padding:13px 14px;margin-bottom:10px;background:#fff}
+.analysis-finding-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.analysis-finding-top b{font-size:.9rem;color:#2c3d54}
+.analysis-finding pre{margin:8px 0;padding:8px 10px;background:#f7f8fa;border-radius:4px;font-size:.76rem;color:#5a6b82;white-space:pre-wrap;word-break:break-word}
+.analysis-cause{margin:6px 0;font-size:.85rem;color:#33465d;line-height:1.6;white-space:pre-wrap}
+.analysis-confidence{display:inline-block;margin-right:8px;font-size:.75rem;color:#7b8fa9;background:#f0f4f9;border-radius:4px;padding:2px 8px}
+.analysis-action{margin:8px 0 0;font-size:.82rem;color:#2f6bb5;white-space:pre-wrap}
+#trends-host .list-heading{display:flex;align-items:center;justify-content:space-between}
 @media(max-width:760px){
   .pending-badge{margin-left:0;display:block;margin-top:5px}
   .annotate-button{margin-left:0;margin-top:6px;display:block}

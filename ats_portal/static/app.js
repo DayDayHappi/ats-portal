@@ -12,7 +12,7 @@ function logText(text){
 const LOG_BATCH_SIZE=300;
 const LOG_WINDOW_SIZE=900;
 const newLog = (values={}) => ({name:'',start:1,next:1,query:'',search:false,hasMore:false,history:[],lines:[],loading:false,loadError:null,lastScroll:0,target:null,locate:null,...values});
-const state = {filters:{mode:'',date_from:'',date_to:'',status:'',category:'',label:'',q:'',issues_only:false,unannotated:false}, page:1, pageSize:15, options:{modes:[],categories:[],labels:[],timezone:'Asia/Shanghai'}, current:null, tab:'results', issuePage:1, log:newLog(), version:0, logVersion:0};
+const state = {filters:{mode:'',date_from:'',date_to:'',status:'',category:'',label:'',q:'',issues_only:false,unannotated:false}, page:1, pageSize:15, options:{modes:[],categories:[],labels:[],timezone:'Asia/Shanghai',ai_enabled:false,ai_model:''}, current:null, tab:'results', issuePage:1, log:newLog(), analysis:null, trends:null, version:0, logVersion:0};
 let listVersion=0;
 const main = $('#main');
 const statusLabels = {PASS:'通过',FAIL:'失败',ERROR:'执行错误',SKIP:'跳过',ABORTED:'已中止',UNKNOWN:'待确认'};
@@ -94,7 +94,7 @@ async function route(){
       const run=await api(`/runs/${encodeURIComponent(decodeURIComponent(hash.slice(6)))}`);
       if(version!==state.version) return;
       if(state.current?.id!==run.id)state.log=newLog();
-      state.current=run;state.tab='results';state.issuePage=1;
+      state.current=run;state.tab='results';state.issuePage=1;state.analysis=null;
       state.resultOverview=buildResultOverview(run);state.resultView=newResultView(state.resultOverview);
       renderDetail();
     }else{
@@ -113,6 +113,7 @@ function renderList(){
   const f=state.filters;
   main.innerHTML=`<div class="page-heading"><div><div class="eyebrow">TEST EXECUTIONS</div><h1>${location.hash==='#issues'?'问题视图':'测试执行'}</h1><p>${location.hash==='#issues'?'查看检测到异常的运行，保留原始测试判定。':'按日期与压测模式，查看每一次测试。'}</p></div><span class="date-chip">${esc(fmt(new Date().toISOString(),true))}</span></div>
   <section class="metrics" id="metrics" aria-label="当前筛选结果统计"></section>
+  ${state.options.ai_enabled?`<section class="panel" id="trends-host"><div class="list-heading"><h2>跨运行趋势分析</h2><span class="muted">基于当前筛选范围</span><button class="button soft" data-action="trends">AI 趋势分析</button></div></section>`:''}
   <section class="panel"><form class="filters" id="filter-form">
     <div class="field date"><label for="date-from">开始日期</label><input id="date-from" type="date" name="date_from" value="${esc(f.date_from)}"></div>
     <div class="field date"><label for="date-to">结束日期</label><input id="date-to" type="date" name="date_to" value="${esc(f.date_to)}"></div>
@@ -148,7 +149,7 @@ async function loadList(){
 function renderDetail(){
   const r=state.current;
   const wall=r.ended_at?duration(new Date(r.ended_at)-new Date(r.started_at)):'未记录结束时间';
-  main.innerHTML=`<a href="#runs" class="back-link" aria-label="返回测试记录">‹ 返回测试记录</a><div class="page-heading detail-heading"><div><div class="eyebrow">EXECUTION DETAILS</div><h1>${esc(r.mode.name)}</h1><span class="run-id">${esc(r.id)}</span><button class="copy-run-id button link" data-action="copy-run-id" title="复制运行编号" aria-label="复制运行编号">⧉</button></div>${badge(r.status,r.upload_state!=='complete')}</div><dl class="panel detail-meta">${[['开始时间',fmt(r.started_at)],['结束时间',fmt(r.ended_at)],['运行时长',wall],['执行主机',r.source.host||'未记录'],['设备 / 固件',renderMeta(r)],['归档日期',r.run_date],['收到时间',fmt(r.received_at)],['资料状态',r.upload_state==='complete'?'已完整归档':'等待文件接收 / 归档确认']].map(([k,v])=>`<div class="meta-item"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl><section class="panel"><div class="detail-total"><span>用例总数<b>${r.summary.total}</b></span><span>通过<b>${r.summary.passed}</b></span><span>失败 / 错误<b>${r.summary.failed+r.summary.errored}</b></span><span>跳过<b>${r.summary.skipped}</b></span><span>问题记录<b>${r.issue_count}</b></span><span>需关注<b>${r.attention_count??'—'}</b></span><span>已标注<b>${(r.annotations||[]).length}</b></span></div><div class="tabs" role="tablist" aria-label="运行详情"><button role="tab" data-tab="results">用例结果 (${r.results.length})</button><button role="tab" data-tab="issues">问题 (${r.issues.length})</button><button role="tab" data-tab="logs">原始日志 (${r.artifacts.length})</button></div><div class="tab-content" id="tab-content" role="tabpanel"></div></section>`;
+  main.innerHTML=`<a href="#runs" class="back-link" aria-label="返回测试记录">‹ 返回测试记录</a><div class="page-heading detail-heading"><div><div class="eyebrow">EXECUTION DETAILS</div><h1>${esc(r.mode.name)}</h1><span class="run-id">${esc(r.id)}</span><button class="copy-run-id button link" data-action="copy-run-id" title="复制运行编号" aria-label="复制运行编号">⧉</button></div>${badge(r.status,r.upload_state!=='complete')}</div><dl class="panel detail-meta">${[['开始时间',fmt(r.started_at)],['结束时间',fmt(r.ended_at)],['运行时长',wall],['执行主机',r.source.host||'未记录'],['设备 / 固件',renderMeta(r)],['归档日期',r.run_date],['收到时间',fmt(r.received_at)],['资料状态',r.upload_state==='complete'?'已完整归档':'等待文件接收 / 归档确认']].map(([k,v])=>`<div class="meta-item"><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl><section class="panel"><div class="detail-total"><span>用例总数<b>${r.summary.total}</b></span><span>通过<b>${r.summary.passed}</b></span><span>失败 / 错误<b>${r.summary.failed+r.summary.errored}</b></span><span>跳过<b>${r.summary.skipped}</b></span><span>问题记录<b>${r.issue_count}</b></span><span>需关注<b>${r.attention_count??'—'}</b></span><span>已标注<b>${(r.annotations||[]).length}</b></span></div><div class="tabs" role="tablist" aria-label="运行详情"><button role="tab" data-tab="results">用例结果 (${r.results.length})</button><button role="tab" data-tab="issues">问题 (${r.issues.length})</button><button role="tab" data-tab="logs">原始日志 (${r.artifacts.length})</button>${state.options.ai_enabled?'<button role="tab" data-tab="analysis">AI 分析</button>':''}</div><div class="tab-content" id="tab-content" role="tabpanel"></div></section>`;
   renderTab();
 }
 
@@ -168,6 +169,7 @@ function renderTab(){
   document.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===state.tab);b.setAttribute('aria-selected',String(b.dataset.tab===state.tab));});
   if(state.tab==='logs')return renderLogs();
   if(state.tab==='issues')return renderIssues();
+  if(state.tab==='analysis')return renderAnalysisTab();
   const r=state.current;
   if(!r.results.length){$('#tab-content').innerHTML=empty('没有可展示的用例结果',r.upload_state==='complete'?'本次运行没有提供有效的用例结果，运行状态保留为待确认或已中止。':'上传完成后，用例结果将显示在这里。');return;}
   renderResults();
@@ -186,6 +188,45 @@ function renderIssues(){
 }
 
 function artifactBase(){return `/runs/${encodeURIComponent(state.current.id)}/artifacts/${encodeURIComponent(state.log.name)}`;}
+function renderAnalysisTab(){
+  const a=state.analysis;
+  if(!a){
+    $('#tab-content').innerHTML=`<div class="analysis-panel"><div class="analysis-placeholder"><div class="empty-symbol">✦</div><h3>AI 根因分析</h3><p>AI 将对比本次运行的异常日志片段与同一测试项在成功运行中的日志，推断可能的根因。仅在点击时调用 AI 服务，日志片段会发送到所配置的 AI 接口。</p><button class="button primary" data-action="run-analysis">生成分析</button></div></div>`;
+    return;
+  }
+  $('#tab-content').innerHTML=renderAnalysis(a,'run');
+}
+function renderAnalysis(data, kind){
+  const a=data.analysis||{summary:'',findings:[],recurring:[]};
+  const meta=`<span class="analysis-meta">${esc(data.model||'')} · ${data.cached?'缓存结果':esc(fmt(data.created_at))}</span>`;
+  const refresh=`<button class="button soft" data-action="${kind==='run'?'run-analysis-refresh':'trends-refresh'}">重新分析</button>`;
+  const body=kind==='run'
+    ? (a.findings||[]).map(f=>`<article class="analysis-finding"><div class="analysis-finding-top"><b>${esc(f.test_item||'')}</b>${f.cycle!==undefined&&f.cycle!==null&&f.cycle!==''?`<span class="muted">第${esc(f.cycle)}轮</span>`:''}${f.status?`${badge(f.status)}`:''}</div><p class="analysis-cause">${esc(f.likely_root_cause||'')}</p>${f.evidence?`<pre>${esc(f.evidence)}</pre>`:''}${f.confidence?`<span class="analysis-confidence">置信度 ${esc(f.confidence)}</span>`:''}${f.suggested_action?`<p class="analysis-action">建议：${esc(f.suggested_action)}</p>`:''}</article>`).join('')
+    : (a.recurring||[]).map(f=>`<article class="analysis-finding"><div class="analysis-finding-top"><b>${esc(f.pattern||'')}</b>${f.test_item?`<span class="muted">${esc(f.test_item)}</span>`:''}</div>${f.occurrence_count?`<span class="analysis-confidence">出现 ${esc(f.occurrence_count)} 次</span>`:''}${f.affected_runs?`<span class="analysis-confidence">影响 ${esc(f.affected_runs)} 次运行</span>`:''}${f.hypothesis?`<p class="analysis-cause">${esc(f.hypothesis)}</p>`:''}${f.suggested_action?`<p class="analysis-action">建议：${esc(f.suggested_action)}</p>`:''}</article>`).join('');
+  return `<div class="analysis-panel"><div class="tab-toolbar"><span>AI 分析仅供参考，需结合人工判断</span>${meta}</div><div class="analysis-summary"><h3>总体结论</h3><p>${esc(a.summary||'')}</p></div><div class="analysis-actions">${refresh}</div>${body||'<p class="muted">没有可展示的分析条目。</p>'}</div>`;
+}
+async function analyzeRun(refresh){
+  const box=$('#tab-content');
+  box.innerHTML=`<div class="analysis-panel"><div class="analysis-loading">${skeleton('18px','60%')}<p class="muted">正在生成分析，可能需要数十秒…</p></div></div>`;
+  try{
+    const data=await api(`/runs/${encodeURIComponent(state.current.id)}/analysis`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({refresh})});
+    state.analysis=data;renderAnalysisTab();
+  }catch(error){box.innerHTML=errorHtml(error.message);}
+}
+async function analyzeTrends(refresh){
+  const box=$('#trends-host');
+  box.innerHTML=`<div class="analysis-panel"><div class="analysis-loading">${skeleton('18px','60%')}<p class="muted">正在汇总跨运行趋势…</p></div></div>`;
+  try{
+    const data=await api('/analysis/trends',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:state.filters.mode,date_from:state.filters.date_from,date_to:state.filters.date_to,refresh})});
+    state.trends=data;renderTrends();
+  }catch(error){box.innerHTML=errorHtml(error.message);}
+}
+function renderTrends(){
+  const host=$('#trends-host');
+  if(!host)return;
+  if(!state.trends){host.innerHTML=`<section class="panel"><div class="list-heading"><h2>跨运行趋势分析</h2><span class="muted">基于当前筛选范围</span></div><div class="analysis-panel"><div class="analysis-placeholder"><div class="empty-symbol">✦</div><h3>AI 趋势分析</h3><p>汇总当前筛选范围内多次运行的失败模式，找出反复出现的规律。</p><button class="button primary" data-action="trends">生成趋势分析</button></div></div></section>`;return;}
+  host.innerHTML=`<section class="panel"><div class="list-heading"><h2>跨运行趋势分析</h2><span class="muted">基于当前筛选范围</span></div>${renderAnalysis(state.trends,'trends')}</section>`;
+}
 function logFile(){
   const files=state.current.artifacts.filter(a=>a.received);
   return (files.find(a=>a.name==='serial.log')||files.find(a=>a.kind==='log')||files[0]);
@@ -510,6 +551,10 @@ main.addEventListener('click',event=>{
   }
   if(action==='result-close'){state.resultView.selected='';renderResults();return;}
   if(action==='result-all-tasks'){state.resultView.task='';state.resultView.detailPage=1;renderResults();return;}
+  if(action==='run-analysis'){state.tab='analysis';renderTab();return analyzeRun(false);}
+  if(action==='run-analysis-refresh')return analyzeRun(true);
+  if(action==='trends')return analyzeTrends(false);
+  if(action==='trends-refresh')return analyzeTrends(true);
   if(action==='file'){state.log=newLog({name:button.dataset.name});return renderLogs();}
   if(action==='expand-log'){setLogExpanded(!state.logExpanded);return;}
   if(action==='retry-log')return loadRawLog(state.log.loadError?.direction||'reset');

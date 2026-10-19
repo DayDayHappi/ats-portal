@@ -29,14 +29,25 @@ class Settings:
     max_report_bytes: int = 16 * 1024 * 1024
     require_read_auth: bool = False
     allowed_hosts: tuple = ('localhost', '127.0.0.1', '[::1]')
+    ai_base_url: str = ''
+    ai_api_key: str = ''
+    ai_model: str = ''
+    ai_timeout_seconds: int = 60
+
+    @property
+    def ai_enabled(self) -> bool:
+        return bool(self.ai_base_url and self.ai_api_key and self.ai_model)
 
     def __post_init__(self):
         self.data_dir = Path(self.data_dir).expanduser().resolve()
         self.rules_path = Path(self.rules_path).expanduser().resolve()
         self.labels_path = Path(self.labels_path).expanduser().resolve()
+        self.ai_base_url = self.ai_base_url.rstrip('/')
         ZoneInfo(self.timezone)
         if min(self.max_file_bytes, self.max_run_bytes, self.max_report_bytes) < 1:
             raise ValueError('文件大小限制必须大于 0')
+        if self.ai_timeout_seconds < 1:
+            raise ValueError('AI 超时时间必须大于 0')
 
     @classmethod
     def from_env(cls, environ=None):
@@ -55,4 +66,8 @@ class Settings:
             max_run_bytes=int(env.get('ATS_PORTAL_MAX_RUN_MB', '2048')) * 1024**2,
             require_read_auth=env.get('ATS_PORTAL_READ_AUTH', 'false').lower() == 'true',
             allowed_hosts=tuple(x.strip() for x in env.get('ATS_PORTAL_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]').split(',') if x.strip()),
+            ai_base_url=env.get('ATS_PORTAL_AI_BASE_URL', ''),
+            ai_api_key=env.get('ATS_PORTAL_AI_API_KEY', ''),
+            ai_model=env.get('ATS_PORTAL_AI_MODEL', ''),
+            ai_timeout_seconds=int(env.get('ATS_PORTAL_AI_TIMEOUT', '60')),
         )
